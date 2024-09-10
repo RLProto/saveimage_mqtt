@@ -1,0 +1,5 @@
+venv/
+data/
+app.backup.py
+applocal.py
+saveimage.py

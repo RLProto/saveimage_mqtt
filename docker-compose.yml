@@ -1,0 +1,37 @@
+version: '3'
+services:
+  saveimage:
+    container_name: saveimage
+    #image: rlproto/saveimage:saveimage-v1.0 
+    build:
+      context: ./
+      dockerfile: dockerfile
+    networks:
+      - edge-device_sv-network
+    restart: unless-stopped
+    volumes:
+      - /var/lib/docker/volumes/saveimage:/app/data
+    environment:
+      EQUIPMENT: "pre_mosturador"
+      VALID_STEPS: "1;0;1;1,2;0;2;2,3;0;3;3,4;0;1;4,5;0;2;5"
+      WS_API_URL: "ws://sv-inferencia-python:9999/inference"
+      DB_HOST: "10.15.160.2"
+      DB_PORT: "8080"
+      DB_NAME: "papude"
+      DB_USER: "papude"
+      DB_PASSWORD: "ambev2021"
+      STEP_TAG: "1.14.37.52.1.2-1.162-1.0.7244"
+      LOTE_TAG: "1.14.37.52.1.2-1.162-1.0.7238"
+      PRODUCT_TAG: "1.14.37.52.1.2-1.162-1.0.7240"
+      MQTT_TOPIC_STEP: "D2C/1.14.37.52.1.2-1.162-1.0"
+    ports:
+      - "8000:8000"
+
+    command: ["python", "main.py"]
+
+volumes:
+  pre_mosturador:
+
+networks:
+  edge-device_sv-network:
+    external: true
