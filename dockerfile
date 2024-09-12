@@ -6,7 +6,7 @@ EXPOSE 8000
 # Set the working directory in the container
 WORKDIR /app
 
-# Install necessary packages including C++ compiler (g++) and CMake for building numpy
+# Install necessary packages including PostgreSQL dev libraries, C++ compiler, and CMake for building packages
 RUN apt-get update && apt-get install -y \
     libssl-dev \
     gcc \
@@ -18,6 +18,7 @@ RUN apt-get update && apt-get install -y \
     libxslt-dev \
     zlib1g-dev \
     libjpeg62-turbo-dev \
+    libpq-dev \
     && rm -rf /var/lib/apt/lists/*
 
 RUN pip install --upgrade pip
@@ -32,4 +33,4 @@ RUN pip install -r requirements.txt
 COPY . .
 
 # Run app.py when the container launches
-CMD ["python", "app.py"]
+CMD ["python", "main.py"]
