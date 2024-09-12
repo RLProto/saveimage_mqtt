@@ -14,7 +14,6 @@ def on_mqtt_connect(client, userdata, flags, rc):
     if rc == 0:
         logging.info("Successfully connected to MQTT broker")
         client.subscribe(MQTT_TOPIC_STEP)
-        client.subscribe(MQTT_TOPIC_PRODUCT)
     else:
         logging.error(f"Failed to connect to MQTT broker, return code {rc}")
 

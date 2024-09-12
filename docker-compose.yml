@@ -24,6 +24,10 @@ services:
       LOTE_TAG: "1.14.37.52.1.2-1.162-1.0.7238"
       PRODUCT_TAG: "1.14.37.52.1.2-1.162-1.0.7240"
       MQTT_TOPIC_STEP: "D2C/1.14.37.52.1.2-1.162-1.0"
+      PRODUCT_CAPTURE_INTERVAL: "180"  # Default is 180 seconds
+      PRODUCT_NUM_PICTURES: "1"        # Default is 1 picture
+      STEPS_RULE: "SmartBrew Steps"  # Default is "SmartBrew Steps"
+      PRODUCT_RULE: "Soda Vision Produto"  # Default is "Soda Vision Produto"
     ports:
       - "8000:8000"
 

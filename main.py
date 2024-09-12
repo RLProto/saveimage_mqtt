@@ -14,6 +14,10 @@ import websockets
 import numpy as np
 import base64
 import time
+from concurrent.futures import ThreadPoolExecutor
+
+# Use ThreadPoolExecutor for non-blocking saving and processing
+executor = ThreadPoolExecutor(max_workers=5)
 
 # Global variables
 latest_image = None
@@ -21,12 +25,12 @@ latest_lote = None  # Global variable to store the lote value
 image_lock = Lock()  # Lock for thread-safe operations on latest_image
 
 # Retrieve environment variables from docker-compose
-WS_API_URL = os.getenv("WS_API_URL", "ws://192.168.137.200:9999/inference")
-DB_HOST = os.getenv("DB_HOST", "192.168.137.200")
-DB_PORT = os.getenv("DB_PORT", "5432")
+WS_API_URL = os.getenv("WS_API_URL", "ws://100.100.47.141:9999/inference")
+DB_HOST = os.getenv("DB_HOST", "10.15.160.2")
+DB_PORT = os.getenv("DB_PORT", "8080")
 DB_NAME = os.getenv("DB_NAME", "papude")
-DB_USER = os.getenv("DB_USER", "sodavision")
-DB_PASSWORD = os.getenv("DB_PASSWORD", "vision")
+DB_USER = os.getenv("DB_USER", "papude")
+DB_PASSWORD = os.getenv("DB_PASSWORD", "ambev2021")
 
 STEP_TAG = os.getenv("STEP_TAG", "1.14.37.52.1.2-1.859-1.0.212")
 LOTE_TAG = os.getenv("LOTE_TAG", "1.14.37.52.1.2-1.859-1.0.7238")
@@ -35,6 +39,14 @@ PRODUCT_TAG = os.getenv("PRODUCT_TAG", "1.14.37.52.1.2-1.859-1.0.9581")
 EQUIPMENT = os.getenv('EQUIPMENT', 'Decantador')
 VALID_STEPS = os.getenv('VALID_STEPS', "1;0;1;1,2;0;1;2,3;30;3;3,4;0;2;4,5;0;1;5")
 BASE_IMAGE_SAVE_PATH = './data'
+
+# Additional environment variables for product change capturing
+PRODUCT_CAPTURE_INTERVAL = float(os.getenv('PRODUCT_CAPTURE_INTERVAL', 18))
+PRODUCT_NUM_PICTURES = int(os.getenv('PRODUCT_NUM_PICTURES', 1))  
+
+STEPS_RULE = os.getenv("STEPS_RULE", "Soda Vision")
+PRODUCT_RULE = os.getenv("PRODUCT_RULE", "Soda Vision Produto")
+
 
 # Define custom logging level
 IMPORTANT = 20
@@ -63,8 +75,8 @@ def connect_db():
         logging.error(f"Failed to connect to the database: {e}")
         return None
 
-# Function to insert image into the database
-def compress_and_insert_image_to_db(image_path, equipment, classification, accuracy, lote):
+# Function to insert image into the database with the new 'tipo' column
+def compress_and_insert_image_to_db(image_path, equipment, classification, accuracy, lote, tipo):
     try:
         original_image = Image.open(image_path)
         original_image = original_image.convert("RGB")
@@ -78,19 +90,19 @@ def compress_and_insert_image_to_db(image_path, equipment, classification, accur
 
         cursor = connection.cursor()
         insert_query = """
-            INSERT INTO saved_images (date, lote, image, equipamento, classificacao, acuracia) 
-            VALUES (CURRENT_TIMESTAMP, %s, %s, %s, %s, %s);
+            INSERT INTO saved_images (date, lote, image, equipamento, classificacao, acuracia, tipo) 
+            VALUES (CURRENT_TIMESTAMP, %s, %s, %s, %s, %s, %s);
         """
-        cursor.execute(insert_query, (lote, psycopg2.Binary(compressed_image_bytes), equipment, classification, accuracy))
+        cursor.execute(insert_query, (lote, psycopg2.Binary(compressed_image_bytes), equipment, classification, accuracy, tipo))
         connection.commit()
         cursor.close()
         connection.close()
-        logging.info(f"Image and classification data inserted into the database: {image_path}, {classification}, {accuracy}, lote: {lote}")
+        logging.info(f"Image and classification data inserted into the database: {image_path}, {classification}, {accuracy}, lote: {lote}, tipo: {tipo}")
     except Exception as e:
         logging.error(f"Failed to insert image and classification data into the database: {e}")
 
-# Updated function to send image via WebSocket and handle response
-async def send_image_to_api(image_path, lote):
+# Updated function to send image via WebSocket and handle response with tipo
+async def send_image_to_api(image_path, lote, tipo):
     with open(image_path, "rb") as image_file:
         img_bytes = image_file.read()
         img_base64 = base64.b64encode(img_bytes).decode('utf-8')
@@ -107,10 +119,12 @@ async def send_image_to_api(image_path, lote):
         confidence_score = round(confidence_score)
 
         # Call database insert function with additional parameters
-        compress_and_insert_image_to_db(image_path, EQUIPMENT, classification, confidence_score, lote)
+        compress_and_insert_image_to_db(image_path, EQUIPMENT, classification, confidence_score, lote, tipo)
 
-# Function to handle image saving
+
 def take_pictures(step, lote, num_pictures, is_product_change=False):
+    # If product change, set tipo to "CIP", otherwise "Produzindo"
+    tipo = "CIP" if is_product_change else "Produzindo"
     directory_suffix = "CIP" if is_product_change else step
     directory_path = os.path.join(BASE_IMAGE_SAVE_PATH, EQUIPMENT, directory_suffix)
     ensure_directory(directory_path)
@@ -127,10 +141,11 @@ def take_pictures(step, lote, num_pictures, is_product_change=False):
         try:
             cv2.imwrite(image_path, image_to_save)
             logging.info(f"Image saved: {image_path}")
-            asyncio.run(send_image_to_api(image_path, lote))
+            # Pass tipo to send_image_to_api
+            asyncio.run(send_image_to_api(image_path, lote, tipo))
         except Exception as e:
             logging.error(f"Failed to process image: {e}")
-        time.sleep(0.86)  # Adjust this to control the pacing of images
+        time.sleep(0.47)  # Adjust this to control the pacing of images
 
 
 # Parse the valid steps
@@ -146,7 +161,6 @@ def parse_valid_steps(config):
         steps[step] = {'delay': delay, 'strategy': strategy, 'num_pictures': num_pictures}
     return steps
 
-
 valid_steps = parse_valid_steps(VALID_STEPS)
 logging.info(f"Valid steps loaded: {valid_steps}")
 
@@ -157,12 +171,13 @@ class SubHandler:
         self.active_timer = None
         self.last_strategy = None
         self.initial_product_change = False
+        self.continuous_capture_timer = None
 
     def handle_value_change(self, new_value, lote):
         # Cancel the previous timer if it exists
-        if self.active_timer:
-            self.active_timer.cancel()
-            self.active_timer = None
+        if self.continuous_capture_timer:
+            self.continuous_capture_timer.cancel()
+            self.continuous_capture_timer = None
             logging.info("Cancelled previous timer due to new valid step.")
 
         step_key = f"{float(new_value):.1f}"
@@ -199,27 +214,48 @@ class SubHandler:
         self.last_value = new_value
         self.last_strategy = step_info['strategy'] if step_info else None
 
-    def start_continuous_capture(self, step, interval, num_pictures, lote):
-        def capture():
-            take_pictures(step, lote, num_pictures)
-            self.active_timer = Timer(interval, capture)
-            self.active_timer.start()
-
-        capture()
-
     def handle_product_change(self, product, lote):
-        num_pictures = 1
+        # Start continuous capture if product goes from positive/zero to negative
         if product < 0 and self.last_product_value >= 0:
-            take_pictures("any_value",lote,num_pictures, is_product_change=True)
+            logging.info(f"Product value changed to negative. Starting continuous capture for lote {lote}.")
+            # Pass is_product_change=True to indicate this is a product change
+            self.start_continuous_capture("product_change", PRODUCT_CAPTURE_INTERVAL, PRODUCT_NUM_PICTURES, lote, is_product_change=True)
+        
+        # Stop continuous capture if product goes from negative to zero/positive
+        elif product >= 0 and self.last_product_value < 0:
+            logging.info(f"Product value changed to zero or positive. Stopping continuous capture for lote {lote}.")
+            self.stop_continuous_capture()
+
         self.last_product_value = product
+
+
+    def start_continuous_capture(self, step, interval, num_pictures, lote, is_product_change=False):
+        if self.continuous_capture_timer:
+            logging.info("Continuous capture is already running. Not starting a new one.")
+            return
+
+        def capture():
+            take_pictures(step, lote, num_pictures, is_product_change)
+            self.continuous_capture_timer = Timer(interval, capture)
+            self.continuous_capture_timer.start()
+
+        logging.info(f"Starting continuous capture for {lote} at step {step}. Interval: {interval}s, Pictures: {num_pictures}")
+        capture()  # Start capturing immediately
+
+
+    def stop_continuous_capture(self):
+        if self.continuous_capture_timer:
+            self.continuous_capture_timer.cancel()
+            self.continuous_capture_timer = None
+            logging.info("Continuous capture stopped.")
+
 
 # MQTT callback functions
 def on_mqtt_message(client, userdata, message):
     try:
         payload = json.loads(message.payload.decode('utf-8'))
         rule = payload.get("data", {}).get("rule", "")
-        if rule == "Soda Vision":
-            print("aqui")
+        if rule == STEPS_RULE:
             values = payload.get("data", {}).get("values", {})
             if values:
                 step_value = values.get(STEP_TAG, None)
@@ -228,7 +264,7 @@ def on_mqtt_message(client, userdata, message):
                     logging.info(f"Step value: {step_value}, Lote: {lote_value}")
                     handler.handle_value_change(step_value, lote_value)
 
-        elif rule == "Soda Vision Produto":
+        elif rule == PRODUCT_RULE:
             values = payload.get("data", {}).get("values", {})
             if values:
                 lote_value = values.get(LOTE_TAG, None)
